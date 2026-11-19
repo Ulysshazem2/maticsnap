@@ -5,11 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MaticSnap</title>
 <style>
-  body{font-family:system-ui,sans-serif;background:#0b1026;color:#f5e6b3;margin:0;padding:24px;text-align:center}
-  h1{color:#e6b422}
-  button{background:#e6b422;color:#0b1026;border:0;border-radius:10px;padding:14px 22px;font-size:16px;font-weight:600;margin:8px}
-  #msg{margin-top:16px;min-height:24px}
-  img{width:72px;height:72px;border-radius:50%;margin-top:12px}
+  body{font-family:system-ui,sans-serif;background:#0b1026;color:#f5e6b3;margin:0;padding:20px;text-align:center}
+  h1{color:#e6b422;margin:8px 0}
+  button{background:#e6b422;color:#0b1026;border:0;border-radius:10px;padding:12px 20px;font-size:16px;font-weight:600;margin:6px}
+  button:disabled{opacity:.5}
+  input[type=text]{width:90%;max-width:420px;padding:12px;border-radius:10px;border:1px solid #e6b422;background:#141a3a;color:#f5e6b3;font-size:16px;margin:6px 0}
+  input[type=file]{margin:8px 0;max-width:90%}
+  #msg{min-height:22px;color:#ffb3b3}
+  .avatar{width:48px;height:48px;border-radius:50%}
+  #publier{background:#141a3a;border:1px solid #e6b422;border-radius:14px;padding:14px;margin:16px auto;max-width:460px}
+  #feed{max-width:460px;margin:20px auto}
+  .post{background:#141a3a;border-radius:14px;padding:12px;margin:16px 0;text-align:left}
+  .post .auteur{display:flex;align-items:center;gap:10px;font-weight:600}
+  .post .auteur img{width:36px;height:36px;border-radius:50%}
+  .post img.media,.post video.media{width:100%;border-radius:10px;margin-top:10px;background:#000}
+  .post p{margin:10px 0 2px}
 </style>
 </head>
 <body>
@@ -21,12 +31,27 @@
 <div id="profil"></div>
 <p id="msg"></p>
 
+<div id="publier" hidden>
+  <h3>Publier</h3>
+  <input type="file" id="fichier" accept="image/*,video/*"><br>
+  <input type="text" id="legende" placeholder="Légende (facultatif)" maxlength="200"><br>
+  <button id="btnPublier">Publier</button>
+</div>
+
+<div id="feed"></div>
+
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getFirestore, collection, addDoc, serverTimestamp, query, orderBy, limit, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-// REMPLACE les 4 valeurs ci-dessous par celles de ta console Firebase
+// ====== À REMPLIR avec tes valeurs Cloudinary ======
+const CLOUDINARY_CLOUD_NAME = "COLLE_TON_CLOUD_NAME";
+const CLOUDINARY_UPLOAD_PRESET = "COLLE_TON_UPLOAD_PRESET";
+// ====================================================
+
 const app = initializeApp({
   apiKey: "AIzaSyBFb_NwxrfimsVSlXAM2fm0icMbTsmvBC8",
   authDomain: "zenith-5a212.firebaseapp.com",
@@ -37,12 +62,15 @@ const app = initializeApp({
 });
 
 const auth = getAuth(app);
+const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
-const msg = document.getElementById("msg");
+const $ = (id) => document.getElementById(id);
+const msg = $("msg");
+let utilisateur = null;
 
 getRedirectResult(auth).catch(e => msg.textContent = "Erreur : " + e.code);
 
-document.getElementById("login").onclick = async () => {
+$("login").onclick = async () => {
   try {
     await signInWithPopup(auth, provider);
   } catch (e) {
@@ -53,15 +81,308 @@ document.getElementById("login").onclick = async () => {
     }
   }
 };
-document.getElementById("logout").onclick = () => signOut(auth);
+$("logout").onclick = () => signOut(auth);
 
 onAuthStateChanged(auth, (user) => {
-  document.getElementById("login").hidden = !!user;
-  document.getElementById("logout").hidden = !user;
-  document.getElementById("profil").innerHTML = user
-    ? `<img src="${user.photoURL || ""}" alt=""><p>Connecté : ${user.displayName}</p>`
-    : "";
+  utilisateur = user;
+  $("login").hidden = !!user;
+  $("logout").hidden = !user;
+  $("publier").hidden = !user;
+  const profil = $("profil");
+  profil.textContent = "";
+  if (user) {
+    if (user.photoURL) {
+      const img = document.createElement("img");
+      img.src = user.photoURL; img.className = "avatar"; img.alt = "";
+      profil.appendChild(img);
+    }
+    const p = document.createElement("p");
+    p.textContent = "Connecté : " + user.displayName;
+    profil.appendChild(p);
+  }
 });
+
+// Publier : envoi du fichier vers Cloudinary, puis enregistrement dans Firestore
+$("btnPublier").onclick = async () => {
+  msg.style.color = "#ffb3b3";
+  msg.textContent = "";
+  const fichier = $("fichier").files[0];
+  if (!utilisateur) { msg.textContent = "Connecte-toi d'abord."; return; }
+  if (!fichier) { msg.textContent = "Choisis une photo ou une vidéo."; return; }
+  if (fichier.size > 50 * 1024 * 1024) { msg.textContent = "Fichier trop lourd (50 Mo maximum)."; return; }
+  if (CLOUDINARY_CLOUD_NAME.startsWith("COLLE")) { msg.textContent = "Cloudinary n'est pas encore configuré."; return; }
+
+  const bouton = $("btnPublier");
+  bouton.disabled = true;
+  msg.style.color = "#f5e6b3";
+  msg.textContent = "Envoi en cours…";
+  try {
+    const fd = new FormData();
+    fd.append("file", fichier);
+    fd.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+    const rep = await fetch("https://api.cloudinary.com/v1_1/" + CLOUDINARY_CLOUD_NAME + "/auto/upload", { method: "POST", body: fd });
+    const data = await rep.json();
+    if (!rep.ok) throw new Error((data.error && data.error.message) || "Échec de l'envoi");
+
+    await addDoc(collection(db, "posts"), {
+      url: data.secure_url,
+      type: data.resource_type === "video" ? "video" : "image",
+      legende: $("legende").value.trim(),
+      uid: utilisateur.uid,
+      nom: utilisateur.displayName || "Anonyme",
+      photo: utilisateur.photoURL || "",
+      createdAt: serverTimestamp()
+    });
+    $("fichier").value = "";
+    $("legende").value = "";
+    msg.textContent = "Publié !";
+  } catch (e) {
+    msg.style.color = "#ffb3b3";
+    msg.textContent = "Erreur : " + (e.message || e.code);
+  }
+  bouton.disabled = false;
+};
+
+// Fil des publications, visible par tout le monde, en direct
+const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(30));
+onSnapshot(q, (snap) => {
+  const feed = $("feed");
+  feed.textContent = "";
+  snap.forEach((d) => {
+    const p = d.data();
+    const carte = document.createElement("div");
+    carte.className = "post";
+
+    const auteur = document.createElement("div");
+    auteur.className = "auteur";
+    if (p.photo) {
+      const av = document.createElement("img");
+      av.src = p.photo; av.alt = "";
+      auteur.appendChild(av);
+    }
+    const nom = document.createElement("span");
+    nom.textContent = p.nom || "Anonyme";
+    auteur.appendChild(nom);
+    carte.appendChild(auteur);
+
+    let media;
+    if (p.type === "video") {
+      media = document.createElement("video");
+      media.controls = true;
+      media.playsInline = true;
+      media.preload = "metadata";
+    } else {
+      media = document.createElement("img");
+      media.alt = "";
+      media.loading = "lazy";
+    }
+    media.className = "media";
+    media.src = p.url;
+    carte.appendChild(media);
+
+    if (p.legende) {
+      const l = document.createElement("p");
+      l.textContent = p.legende;
+      carte.appendChild(l);
+    }
+    feed.appendChild(carte);
+  });
+  if (snap.empty) feed.textContent = "Aucune publication pour l'instant.";
+}, (e) => { msg.textContent = "Erreur du fil : " + e.code; });
+</script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MaticSnap</title>
+<style>
+  body{font-family:system-ui,sans-serif;background:#0b1026;color:#f5e6b3;margin:0;padding:20px;text-align:center}
+  h1{color:#e6b422;margin:8px 0}
+  button{background:#e6b422;color:#0b1026;border:0;border-radius:10px;padding:12px 20px;font-size:16px;font-weight:600;margin:6px}
+  button:disabled{opacity:.5}
+  input[type=text]{width:90%;max-width:420px;padding:12px;border-radius:10px;border:1px solid #e6b422;background:#141a3a;color:#f5e6b3;font-size:16px;margin:6px 0}
+  input[type=file]{margin:8px 0;max-width:90%}
+  #msg{min-height:22px;color:#ffb3b3}
+  .avatar{width:48px;height:48px;border-radius:50%}
+  #publier{background:#141a3a;border:1px solid #e6b422;border-radius:14px;padding:14px;margin:16px auto;max-width:460px}
+  #feed{max-width:460px;margin:20px auto}
+  .post{background:#141a3a;border-radius:14px;padding:12px;margin:16px 0;text-align:left}
+  .post .auteur{display:flex;align-items:center;gap:10px;font-weight:600}
+  .post .auteur img{width:36px;height:36px;border-radius:50%}
+  .post img.media,.post video.media{width:100%;border-radius:10px;margin-top:10px;background:#000}
+  .post p{margin:10px 0 2px}
+</style>
+</head>
+<body>
+<h1>MaticSnap</h1>
+<p>Partage tes photos et vidéos</p>
+
+<button id="login">Se connecter avec Google</button>
+<button id="logout" hidden>Déconnexion</button>
+<div id="profil"></div>
+<p id="msg"></p>
+
+<div id="publier" hidden>
+  <h3>Publier</h3>
+  <input type="file" id="fichier" accept="image/*,video/*"><br>
+  <input type="text" id="legende" placeholder="Légende (facultatif)" maxlength="200"><br>
+  <button id="btnPublier">Publier</button>
+</div>
+
+<div id="feed"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getFirestore, collection, addDoc, serverTimestamp, query, orderBy, limit, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+// ====== À REMPLIR avec tes valeurs Cloudinary ======
+const CLOUDINARY_CLOUD_NAME = "COLLE_TON_CLOUD_NAME";
+const CLOUDINARY_UPLOAD_PRESET = "COLLE_TON_UPLOAD_PRESET";
+// ====================================================
+
+const app = initializeApp({
+  apiKey: "AIzaSyBFb_NwxrfimsVSlXAM2fm0icMbTsmvBC8",
+  authDomain: "zenith-5a212.firebaseapp.com",
+  projectId: "zenith-5a212",
+  storageBucket: "zenith-5a212.firebasestorage.app",
+  messagingSenderId: "811680674432",
+  appId: "1:811680674432:web:b9b4176f75ca04a36a2c65"
+});
+
+const auth = getAuth(app);
+const db = getFirestore(app);
+const provider = new GoogleAuthProvider();
+const $ = (id) => document.getElementById(id);
+const msg = $("msg");
+let utilisateur = null;
+
+getRedirectResult(auth).catch(e => msg.textContent = "Erreur : " + e.code);
+
+$("login").onclick = async () => {
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (e) {
+    if (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment") {
+      signInWithRedirect(auth, provider);
+    } else {
+      msg.textContent = "Erreur : " + e.code;
+    }
+  }
+};
+$("logout").onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, (user) => {
+  utilisateur = user;
+  $("login").hidden = !!user;
+  $("logout").hidden = !user;
+  $("publier").hidden = !user;
+  const profil = $("profil");
+  profil.textContent = "";
+  if (user) {
+    if (user.photoURL) {
+      const img = document.createElement("img");
+      img.src = user.photoURL; img.className = "avatar"; img.alt = "";
+      profil.appendChild(img);
+    }
+    const p = document.createElement("p");
+    p.textContent = "Connecté : " + user.displayName;
+    profil.appendChild(p);
+  }
+});
+
+// Publier : envoi du fichier vers Cloudinary, puis enregistrement dans Firestore
+$("btnPublier").onclick = async () => {
+  msg.style.color = "#ffb3b3";
+  msg.textContent = "";
+  const fichier = $("fichier").files[0];
+  if (!utilisateur) { msg.textContent = "Connecte-toi d'abord."; return; }
+  if (!fichier) { msg.textContent = "Choisis une photo ou une vidéo."; return; }
+  if (fichier.size > 50 * 1024 * 1024) { msg.textContent = "Fichier trop lourd (50 Mo maximum)."; return; }
+  if (CLOUDINARY_CLOUD_NAME.startsWith("COLLE")) { msg.textContent = "Cloudinary n'est pas encore configuré."; return; }
+
+  const bouton = $("btnPublier");
+  bouton.disabled = true;
+  msg.style.color = "#f5e6b3";
+  msg.textContent = "Envoi en cours…";
+  try {
+    const fd = new FormData();
+    fd.append("file", fichier);
+    fd.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+    const rep = await fetch("https://api.cloudinary.com/v1_1/" + CLOUDINARY_CLOUD_NAME + "/auto/upload", { method: "POST", body: fd });
+    const data = await rep.json();
+    if (!rep.ok) throw new Error((data.error && data.error.message) || "Échec de l'envoi");
+
+    await addDoc(collection(db, "posts"), {
+      url: data.secure_url,
+      type: data.resource_type === "video" ? "video" : "image",
+      legende: $("legende").value.trim(),
+      uid: utilisateur.uid,
+      nom: utilisateur.displayName || "Anonyme",
+      photo: utilisateur.photoURL || "",
+      createdAt: serverTimestamp()
+    });
+    $("fichier").value = "";
+    $("legende").value = "";
+    msg.textContent = "Publié !";
+  } catch (e) {
+    msg.style.color = "#ffb3b3";
+    msg.textContent = "Erreur : " + (e.message || e.code);
+  }
+  bouton.disabled = false;
+};
+
+// Fil des publications, visible par tout le monde, en direct
+const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(30));
+onSnapshot(q, (snap) => {
+  const feed = $("feed");
+  feed.textContent = "";
+  snap.forEach((d) => {
+    const p = d.data();
+    const carte = document.createElement("div");
+    carte.className = "post";
+
+    const auteur = document.createElement("div");
+    auteur.className = "auteur";
+    if (p.photo) {
+      const av = document.createElement("img");
+      av.src = p.photo; av.alt = "";
+      auteur.appendChild(av);
+    }
+    const nom = document.createElement("span");
+    nom.textContent = p.nom || "Anonyme";
+    auteur.appendChild(nom);
+    carte.appendChild(auteur);
+
+    let media;
+    if (p.type === "video") {
+      media = document.createElement("video");
+      media.controls = true;
+      media.playsInline = true;
+      media.preload = "metadata";
+    } else {
+      media = document.createElement("img");
+      media.alt = "";
+      media.loading = "lazy";
+    }
+    media.className = "media";
+    media.src = p.url;
+    carte.appendChild(media);
+
+    if (p.legende) {
+      const l = document.createElement("p");
+      l.textContent = p.legende;
+      carte.appendChild(l);
+    }
+    feed.appendChild(carte);
+  });
+  if (snap.empty) feed.textContent = "Aucune publication pour l'instant.";
+}, (e) => { msg.textContent = "Erreur du fil : " + e.code; });
 </script>
 </body>
 </html>
