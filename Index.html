@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MaticSnap</title>
+<style>
+  body{font-family:system-ui,sans-serif;background:#0b1026;color:#f5e6b3;margin:0;padding:24px;text-align:center}
+  h1{color:#e6b422}
+  button{background:#e6b422;color:#0b1026;border:0;border-radius:10px;padding:14px 22px;font-size:16px;font-weight:600;margin:8px}
+  #msg{margin-top:16px;min-height:24px}
+  img{width:72px;height:72px;border-radius:50%;margin-top:12px}
+</style>
+</head>
+<body>
+<h1>MaticSnap</h1>
+<p>Partage tes photos et vidéos</p>
+
+<button id="login">Se connecter avec Google</button>
+<button id="logout" hidden>Déconnexion</button>
+<div id="profil"></div>
+<p id="msg"></p>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+// REMPLACE les 4 valeurs ci-dessous par celles de ta console Firebase
+const app = initializeApp({
+  apiKey: "AIzaSyBFb_NwxrfimsVSlXAM2fm0icMbTsmvBC8",
+  authDomain: "zenith-5a212.firebaseapp.com",
+  projectId: "zenith-5a212",
+  storageBucket: "zenith-5a212.firebasestorage.app",
+  messagingSenderId: "811680674432",
+  appId: "1:811680674432:web:b9b4176f75ca04a36a2c65"
+});
+
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
+const msg = document.getElementById("msg");
+
+getRedirectResult(auth).catch(e => msg.textContent = "Erreur : " + e.code);
+
+document.getElementById("login").onclick = async () => {
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (e) {
+    if (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment") {
+      signInWithRedirect(auth, provider);
+    } else {
+      msg.textContent = "Erreur : " + e.code;
+    }
+  }
+};
+document.getElementById("logout").onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, (user) => {
+  document.getElementById("login").hidden = !!user;
+  document.getElementById("logout").hidden = !user;
+  document.getElementById("profil").innerHTML = user
+    ? `<img src="${user.photoURL || ""}" alt=""><p>Connecté : ${user.displayName}</p>`
+    : "";
+});
+</script>
+</body>
+</html>
